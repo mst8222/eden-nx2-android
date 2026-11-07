@@ -439,8 +439,10 @@ std::shared_ptr<const LoweredNativeCode> GenericEnvironment::LowerNativeCode(u32
         if (status == Shader::Ampere::ProgramCaptureState::Result::Complete) break;
     }
     const char* const tensor_override = std::getenv("EDEN_NX2_TENSOR");
+    // Android release builds cannot set environment variables, and Fortune's Weave's DLSS
+    // upscaler needs the full software HMMA expansion. Default to "full" instead of "".
     const std::string_view tensor_mode =
-        tensor_override ? tensor_override : (native_tensor_full_by_default ? "full" : "");
+        tensor_override ? tensor_override : (native_tensor_full_by_default ? "full" : "full");
     auto lowered = Shader::Ampere::LowerToMaxwell(native, tensor_mode);
     // EDEN_NX2_REJECT=<hex address>,...: treat these programs as rejected (to find which newly
     // lowered program changes a game's behaviour without rebuilding).

@@ -434,6 +434,20 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
             }
             break;
         }
+        case 0x233: case 0x433: case 0x633: { // HSET2, packed half comparisons and predicate combination.
+            // Ported from zortos293/Lichii (Fortune's Weave shader gaps fix).
+            const u32 combine = insn.Bits(69, 2);
+            if (insn.Bits(64, 5) || combine > 2 || insn.Bits(81, 6) || insn.Bits(91, 1) ||
+                (opcode == 0x233 && (insn.words[1] & 0x0fffff00U)))
+                return fail(index, "native packed half comparison mode");
+            const auto a = half_source(0), b = half_source(opcode == 0x233 ? 1 : 2);
+            emit(base(0x5d18000000000000ULL) | (u64{a.reg} << 8) | (u64{b.reg} << 20) |
+                 (u64{b.swizzle} << 28) | (u64{b.absolute} << 30) | (u64{b.negate} << 31) |
+                 (u64{insn.Bits(76, 4)} << 35) | (u64{insn.Bits(87, 4)} << 39) |
+                 (u64{a.negate} << 43) | (u64{a.absolute} << 44) | (u64{combine} << 45) |
+                 (u64{a.swizzle} << 47) | (u64{insn.Bits(71, 1)} << 49) | (u64{insn.Bits(80, 1)} << 50));
+            break;
+        }
         case 0x240: case 0x840: { // HMNMX2, exact half promotion for min/max
             if (insn.Bits(76, 11) || insn.Bits(91, 1))
                 return fail(index, "native half min/max mode");
@@ -1227,6 +1241,46 @@ inline LoweredProgram LowerToMaxwell(std::span<const Instruction> code,
             emit(0x0400000000000000ULL | predicate | 247 | (u64{247} << 8) | (u64{0xffff} << 20));
             emit(0x5c28000000000000ULL | predicate | 248 | (u64{248} << 8) | (u64{249} << 20));
             emit(0x5c18000000000000ULL | predicate | dest | (u64{248} << 8) | (u64{247} << 20) | (u64{16} << 39));
+            break;
+        }
+        case 0x95c: { // Runtime breakpoint/trap; shipped games only carry the inert marker form.
+            // Ported from zortos293/Lichii, simplified: no verified-traps capture pass here,
+            // so accept only the exact no-op breakpoint word pattern and emit nothing.
+            if (insn.words[0] != 0x795c || insn.words[1] != 4 || insn.words[2] != 0x00300000)
+                return fail(index, "native runtime breakpoint/trap");
+            emit(0x50b0000000000f00ULL | predicate);
+            break;
+        }
+        case 0xfae: { // LDGSTS.E.BYPASS.128 [shared], [global.64], enable
+            // Ported from zortos293/Lichii: complete copies synchronously. Disabled sources
+            // zero-fill without touching global memory. No uniform-mirror base on this branch,
+            // so the 246 register limit always applies.
+            const u32 shared = static_cast<u32>(dest), global = insn.Bits(24, 8);
+            const u32 limit = 246U;
+            const bool promoted_copy = (insn.words[2] & ~0x0780003fU) == 0x08101d40U;
+            const u32 descriptor = insn.Bits(64, 6);
+            const bool descriptor_copy = (insn.words[2] & ~0x0380007fU) == 0x0c101c00U &&
+                                         descriptor < 63 && !(descriptor & 1);
+            if ((insn.words[1] & 0x0000f000U) ||
+                (!promoted_copy && !descriptor_copy) ||
+                shared >= limit || (global & 1) || global + 1 >= limit)
+                return fail(index, "native global-to-shared copy mode");
+            const s32 global_offset = static_cast<s32>(insn.Bits(32, 12) << 20) >> 20;
+            const s32 shared_offset = static_cast<s32>(insn.Bits(48, 16) << 16) >> 12;
+            for (u32 component = 0; component < 4; ++component) mov_imm(248 + component, 0);
+            const u32 enable = insn.Bits(87, 3) |
+                               (insn.Bits(promoted_copy ? 90 : 70, 1) << 3);
+            const u32 skip = static_cast<u32>(result.instructions.size());
+            emit(0);
+            emit(0xeed0000000000000ULL | predicate | 248 | (u64{global} << 8) |
+                 (u64{static_cast<u32>(global_offset) & 0xffffffU} << 20) |
+                 (u64{1} << 45) | (u64{6} << 48));
+            const u32 target = static_cast<u32>(result.instructions.size());
+            const u32 distance = address_of(target) - address_of(skip) - 8;
+            result.instructions[skip] = 0xe24000000000000fULL |
+                                        (u64{enable ^ 8U} << 16) | (u64{distance} << 20);
+            emit(0xef58000000000000ULL | predicate | 248 | (u64{shared} << 8) |
+                 (u64{static_cast<u32>(shared_offset) & 0xffffffU} << 20) | (u64{6} << 48));
             break;
         }
         case 0x23c: { // HMMA.16816.F16: D(16x8) = A(16x16) * B(16x8) + C, f16 fragments.
