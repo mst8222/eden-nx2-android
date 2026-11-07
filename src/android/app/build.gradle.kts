@@ -105,8 +105,12 @@ android {
     }
 
     val keystoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
+    // A fork without the signing secrets still produces an (empty) keystore file from CI;
+    // only use it when it actually contains a key, else fall back to the debug keystore.
+    val hasValidKeystore = !keystoreFile.isNullOrBlank() && file(keystoreFile).exists() &&
+            file(keystoreFile).length() > 0
     signingConfigs {
-        if (keystoreFile != null) {
+        if (hasValidKeystore) {
             create("release") {
                 storeFile = file(keystoreFile)
                 storePassword = System.getenv("ANDROID_KEYSTORE_PASS")
@@ -129,7 +133,7 @@ android {
     buildTypes {
         // Signed by release key, allowing for upload to Play Store.
         release {
-            signingConfig = if (keystoreFile != null) {
+            signingConfig = if (hasValidKeystore) {
                 signingConfigs.getByName("release")
             } else {
                 signingConfigs.getByName("default")
